@@ -9,6 +9,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -18,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -120,6 +122,20 @@ class ProductoOrigen(str, enum.Enum):
     CORDIS = "Cordis"
     KAIROS = "Kairos"
     GIA = "Gia"
+
+
+class ClasificacionHTAFASGO2025(str, enum.Enum):
+    """
+    Clasificación FASGO 2025 de trastornos hipertensivos en el embarazo.
+    ELIMINA los conceptos de PE 'leve' y 'severa': toda PE se evalúa por
+    presencia de signos de compromiso de órgano blanco (checklist booleano).
+    """
+    HIPERTENSION_GESTACIONAL = "HIPERTENSION_GESTACIONAL"
+    PREECLAMPSIA = "PREECLAMPSIA"
+    ECLAMPSIA = "ECLAMPSIA"
+    HIPERTENSION_CRONICA = "HIPERTENSION_CRONICA"
+    HIPERTENSION_CRONICA_CON_PE_SOBREAGREGADA = "HIPERTENSION_CRONICA_CON_PE_SOBREAGREGADA"
+    HIPERTENSION_NO_CLASIFICADA = "HIPERTENSION_NO_CLASIFICADA"
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +300,9 @@ class Episodio(Base):
     hitos: Mapped[list[HitoTiempo]] = relationship(
         back_populates="episodio", cascade="all, delete-orphan"
     )
+    episodio_obstetrico: Mapped[Optional[EpisodioObstetrico]] = relationship(
+        back_populates="episodio", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class Traslado(Base):
@@ -382,3 +401,75 @@ class HitoTiempo(Base):
     )
 
     episodio: Mapped[Episodio] = relationship(back_populates="hitos")
+
+
+# ---------------------------------------------------------------------------
+# Gia SaMD — Módulo Obstétrico / Protocolo FASGO 2025
+# ---------------------------------------------------------------------------
+
+class EpisodioObstetrico(Base):
+    """
+    Gia SaMD — extensión obstétrica del Episodio para trastornos hipertensivos.
+
+    Protocolo FASGO 2025:
+    - Elimina PE 'leve'/'severa'; clasifica por compromiso de órgano blanco.
+    - uRPC >= 30 mg/mmol es el estándar confirmatorio cuantitativo de proteinuria.
+    - Relación one-to-one con Episodio; solo existe para producto_origen='Gia'.
+    """
+    __tablename__ = "episodio_obstetrico"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    episodio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("episodio.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    clasificacion_hta: Mapped[Optional[ClasificacionHTAFASGO2025]] = mapped_column(
+        Enum(ClasificacionHTAFASGO2025, name="clasificacion_hta_fasgo2025"),
+        nullable=True,
+        index=True,
+    )
+
+    edad_gestacional_semanas: Mapped[Optional[int]] = mapped_column(nullable=True)
+    presion_sistolica_mmhg: Mapped[Optional[int]] = mapped_column(nullable=True)
+    presion_diastolica_mmhg: Mapped[Optional[int]] = mapped_column(nullable=True)
+
+    # --- Signos de Severidad — Compromiso Neurológico ---
+    sev_eclampsia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sev_cefalea_persistente: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sev_escotomas: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # --- Signos de Severidad — Compromiso Hepático ---
+    sev_epigastralgia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # GOT (AST) > 2× valor normal (> 70 U/L según FASGO 2025)
+    sev_got_elevada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sev_got_valor_ul: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
+    # GPT (ALT) > 2× valor normal (> 56 U/L según FASGO 2025)
+    sev_gpt_elevada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sev_gpt_valor_ul: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
+
+    # --- Signos de Severidad — Compromiso Hematológico ---
+    # Trombocitopenia: plaquetas < 100.000/mm³
+    sev_trombocitopenia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sev_plaquetas_valor_mm3: Mapped[Optional[int]] = mapped_column(nullable=True)
+
+    # --- Proteinuria — Razón Proteínas/Creatinina Urinaria (uRPC) ---
+    # Punto de corte FASGO 2025: >= 30 mg/mmol confirma proteinuria significativa.
+    # Reemplaza tiras reactivas cualitativas como estándar diagnóstico.
+    urpc_valor_mg_mmol: Mapped[Optional[Decimal]] = mapped_column(Numeric(7, 2), nullable=True)
+    # Calculado y persistido por la capa de servicio (urpc_valor_mg_mmol >= 30)
+    urpc_confirmatorio: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    urpc_fecha_muestra: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    registrado_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    episodio: Mapped[Episodio] = relationship(back_populates="episodio_obstetrico")
