@@ -125,15 +125,10 @@ class PrioridadTraslado(str, enum.Enum):
     PROGRAMADO = "PROGRAMADO"
 
 
-class ProductoOrigen(str, enum.Enum):
-    """
-    Módulo emisor del evento — identifica el producto en entornos multi-módulo.
-    Compartido: por definición es el enum más transversal del core.
-    """
-    CORDIS = "Cordis"
-    KAIROS = "Kairos"
-    GIA = "Gia"
-
+# producto_origen es un String libre a propósito: cada módulo estampa su nombre
+# ("Cordis", "Kairos", "Camas", "ICU", etc.) sin que el core deba conocerlos de
+# antemano. Un enum cerrado obligaría a tocar el core cada vez que entra o sale
+# un módulo del ecosistema — exactamente lo que el principio de oro prohíbe.
 
 # ---------------------------------------------------------------------------
 # Modelos — CORE COMPARTIDO (categoría A)
@@ -269,12 +264,8 @@ class Episodio(Base):
         index=True,
     )
 
-    # Módulo emisor — permite filtrar episodios por producto en entornos multi-módulo.
-    producto_origen: Mapped[ProductoOrigen] = mapped_column(
-        Enum(ProductoOrigen, name="producto_origen"),
-        default=ProductoOrigen.CORDIS,
-        nullable=False,
-    )
+    # Módulo emisor — string libre, ver comentario sobre producto_origen arriba.
+    producto_origen: Mapped[str] = mapped_column(String(20), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
@@ -384,10 +375,8 @@ class HitoTiempo(Base):
         ForeignKey("episodio.id", ondelete="CASCADE"), index=True, nullable=False
     )
 
-    producto_origen: Mapped[ProductoOrigen] = mapped_column(
-        Enum(ProductoOrigen, name="producto_origen"),
-        nullable=False,
-    )
+    # Módulo emisor — string libre, ver comentario sobre producto_origen arriba.
+    producto_origen: Mapped[str] = mapped_column(String(20), nullable=False)
     # String libre — cada módulo define su vocabulario de hitos sin tocar el core.
     # Cordis: TRIAGE_COMPLETADO, MEDICO_LLAMADO, etc.
     # Kairos: PREINGRESO_CONFIRMADO, CIRUGIA_INICIADA, etc.

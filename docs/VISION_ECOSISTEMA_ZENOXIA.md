@@ -67,8 +67,11 @@ disciplina sobre qué entra.
 ## Cordis — Guardia
 El flujo transaccional de la guardia: ingreso, triage N1-N5, sala de espera,
 llamador dinámico, traslados (5 escenarios). Es el módulo más modelado hoy en el
-core. Su estado vive en `EstadoEpisodio` (lógica de guardia — candidata a moverse
-a un espacio propio de Cordis a medida que el core se depura).
+core. El estado genérico del episodio vive en el core como `EstadoEncounter`
+(4 valores FHIR: ACTIVO/EN_ESPERA/COMPLETADO/CANCELADO). La máquina de estados
+fina de guardia (`EstadoEpisodio`, 12 estados) ya fue movida fuera del core en
+Fase 1 — vive en `database/_candidatos_a_mover.py` pendiente de pasar al repo
+de Cordis.
 
 ## Kairos — Quirófanos
 Trazabilidad, coordinación y documentación quirúrgica. Tiene un prototipo de UI
