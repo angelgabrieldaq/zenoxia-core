@@ -1,7 +1,11 @@
 """
 Modelos relacionales de Zenoxia Core — SQLAlchemy 2.0 Async / Mapped / typed.
 Entidades alineadas al estándar HL7 FHIR para interoperabilidad entre módulos
-Cordis (Guardia), Kairos (Quirófanos) y Gia (Obstetricia SaMD).
+Cordis (Guardia), Kairos (Quirófanos), Camas y futuros módulos.
+
+Principio de oro: este archivo contiene SOLO lo genuinamente compartido entre
+dos o más módulos. Lo específico de un módulo vive en ese módulo, nunca acá.
+Ver database/_candidatos_a_mover.py para el código que salió del core.
 """
 
 from __future__ import annotations
@@ -9,7 +13,6 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -19,7 +22,6 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
-    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -43,11 +45,16 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
-# Enumeraciones de dominio
+# Enumeraciones de dominio — CORE COMPARTIDO (categoría A)
+# Criterio: usadas por 2+ módulos del ecosistema.
 # ---------------------------------------------------------------------------
 
 class TipoRecursoFHIR(str, enum.Enum):
-    """FHIR Location.physicalType — infraestructura física del establecimiento."""
+    """
+    FHIR Location.physicalType — infraestructura física del establecimiento.
+    Compartido: Cordis (llamador, traslados), Kairos (quirófano, cama post-op),
+    Camas (gestión de disponibilidad), ICU (cama UTI).
+    """
     CONSULTORIO = "CONSULTORIO"
     BOX_OBSERVACION = "BOX_OBSERVACION"
     CAMA_INTERNACION = "CAMA_INTERNACION"
@@ -59,40 +66,37 @@ class TipoRecursoFHIR(str, enum.Enum):
 
 
 class EstadoCacheRecurso(str, enum.Enum):
-    """Estado operativo del recurso físico; mutable para el llamador dinámico."""
+    """
+    Estado operativo del recurso físico.
+    Compartido: Cordis (llamador dinámico), Kairos (disponibilidad de quirófano),
+    Camas (libre/ocupado), ICU.
+    """
     LIBRE = "LIBRE"
     OCUPADO = "OCUPADO"
     LIMPIEZA = "LIMPIEZA"
     FUERA_DE_SERVICIO = "FUERA_DE_SERVICIO"
 
 
-class EstadoEpisodio(str, enum.Enum):
-    """Máquina de estados del paciente en el viaje por la guardia (Cordis)."""
-    INGRESO_RECEPCION = "INGRESO_RECEPCION"
-    SALA_ESPERA_PRE_TRIAGE = "SALA_ESPERA_PRE_TRIAGE"
-    EN_TRIAGE = "EN_TRIAGE"
-    SALA_ESPERA_EVALUADO = "SALA_ESPERA_EVALUADO"
-    MEDICO_LLAMADO = "MEDICO_LLAMADO"
-    EN_ATENCION = "EN_ATENCION"
-    PENDIENTE_ESTUDIO = "PENDIENTE_ESTUDIO"
-    RETORNO_POST_ESTUDIO = "RETORNO_POST_ESTUDIO"
-    OBSERVACION_TRANSITORIA = "OBSERVACION_TRANSITORIA"
-    EN_OBSERVACION = "EN_OBSERVACION"
-    EGRESO_FISICO = "EGRESO_FISICO"
-    ALTA_MEDICA = "ALTA_MEDICA"
-
-
-class NivelTriage(str, enum.Enum):
-    """Escala de Manchester / prioridad de urgencia N1 (crítico) — N5 (no urgente)."""
-    N1 = "N1"
-    N2 = "N2"
-    N3 = "N3"
-    N4 = "N4"
-    N5 = "N5"
+class EstadoEncounter(str, enum.Enum):
+    """
+    Estado genérico del encuentro clínico — alineado a FHIR Encounter.status.
+    Compartido: todos los módulos que crean episodios (Cordis, Kairos, Gia, Camas).
+    Los estados específicos del flujo de cada módulo (ej. EN_TRIAGE de Cordis,
+    EN_QUIROFANO de Kairos) se registran en HitoTiempo, no acá.
+    Ver _candidatos_a_mover.py → EstadoEpisodio para los estados Cordis-específicos.
+    """
+    ACTIVO = "ACTIVO"           # FHIR: in-progress — el episodio está en curso
+    EN_ESPERA = "EN_ESPERA"     # FHIR: on-hold / planned — pendiente de inicio
+    COMPLETADO = "COMPLETADO"   # FHIR: completed / discharged — cerrado exitosamente
+    CANCELADO = "CANCELADO"     # FHIR: cancelled — anulado
 
 
 class EstadoTraslado(str, enum.Enum):
-    """Máquina de estados del camillero (RN-12)."""
+    """
+    Máquina de estados del traslado físico.
+    Compartido: Cordis (camilleros en guardia), Kairos (movimiento a/desde quirófano),
+    Camas (traslado a cama asignada), ICU.
+    """
     SOLICITADO = "SOLICITADO"
     ASIGNADO = "ASIGNADO"
     EN_CAMINO_ORIGEN = "EN_CAMINO_ORIGEN"
@@ -103,48 +107,42 @@ class EstadoTraslado(str, enum.Enum):
 
 
 class EquipoTraslado(str, enum.Enum):
-    """Escenarios de traslado físico — Escenarios 1-5 del diseño."""
-    CAMINA_SOLO = "CAMINA_SOLO"           # Escenario 1 — autónomo
-    SILLA_DE_RUEDAS = "SILLA_DE_RUEDAS"  # Escenario 3 — asistido
-    CAMILLA = "CAMILLA"                   # Escenario 3 — asistido
+    """
+    Medio de traslado físico del paciente.
+    Compartido: cualquier módulo que mueva pacientes entre ubicaciones.
+    """
+    CAMINA_SOLO = "CAMINA_SOLO"
+    SILLA_DE_RUEDAS = "SILLA_DE_RUEDAS"
+    CAMILLA = "CAMILLA"
     FAMILIAR_ASISTIDO = "FAMILIAR_ASISTIDO"
     AMBULANCIA_INTERNA = "AMBULANCIA_INTERNA"
 
 
 class PrioridadTraslado(str, enum.Enum):
+    """Compartido: toda solicitud de traslado en cualquier módulo tiene una prioridad."""
     URGENTE = "URGENTE"
     NORMAL = "NORMAL"
     PROGRAMADO = "PROGRAMADO"
 
 
 class ProductoOrigen(str, enum.Enum):
-    """Módulo emisor del evento — identifica el producto en entornos multi-módulo."""
+    """
+    Módulo emisor del evento — identifica el producto en entornos multi-módulo.
+    Compartido: por definición es el enum más transversal del core.
+    """
     CORDIS = "Cordis"
     KAIROS = "Kairos"
     GIA = "Gia"
 
 
-class ClasificacionHTAFASGO2025(str, enum.Enum):
-    """
-    Clasificación FASGO 2025 de trastornos hipertensivos en el embarazo.
-    ELIMINA los conceptos de PE 'leve' y 'severa': toda PE se evalúa por
-    presencia de signos de compromiso de órgano blanco (checklist booleano).
-    """
-    HIPERTENSION_GESTACIONAL = "HIPERTENSION_GESTACIONAL"
-    PREECLAMPSIA = "PREECLAMPSIA"
-    ECLAMPSIA = "ECLAMPSIA"
-    HIPERTENSION_CRONICA = "HIPERTENSION_CRONICA"
-    HIPERTENSION_CRONICA_CON_PE_SOBREAGREGADA = "HIPERTENSION_CRONICA_CON_PE_SOBREAGREGADA"
-    HIPERTENSION_NO_CLASIFICADA = "HIPERTENSION_NO_CLASIFICADA"
-
-
 # ---------------------------------------------------------------------------
-# Modelos
+# Modelos — CORE COMPARTIDO (categoría A)
 # ---------------------------------------------------------------------------
 
 class Patient(Base):
     """
-    FHIR Patient — datos de identidad inmutables del paciente.
+    FHIR Patient — identidad del paciente.
+    Compartido: todos los módulos trabajan sobre el mismo paciente.
     El DNI es el identificador primario de negocio (7-8 dígitos, indexado).
     """
     __tablename__ = "patient"
@@ -158,12 +156,19 @@ class Patient(Base):
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
     apellido: Mapped[str] = mapped_column(String(100), nullable=False)
     fecha_nacimiento: Mapped[date] = mapped_column(Date, nullable=False)
-    # FHIR gender: male | female | other | unknown → almacenado como código
+    # FHIR gender: male | female | other | unknown
     sexo: Mapped[str] = mapped_column(String(10), nullable=False)
     telefono: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+    # Antecedentes clínicos de fondo del paciente — transversal a todos los módulos.
+    # Ejemplos: alergias conocidas, condiciones crónicas, medicación habitual.
+    # NO incluye tags de una visita puntual (esos son de cada módulo).
+    # Schema JSONB libre; el contenido específico lo define cada módulo al escribir.
+    # Ver _candidatos_a_mover.py → MÓDULO: Cordis para los tags de visita de guardia.
+    antecedentes_clinicos: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     episodios: Mapped[list[Episodio]] = relationship(
         back_populates="patient", cascade="all, delete-orphan"
@@ -172,9 +177,10 @@ class Patient(Base):
 
 class MedicalService(Base):
     """
-    Catálogo extensible de especialidades y servicios. No hardcodeado en queries.
-    Permite al administrador añadir nuevos servicios (ej. Cardiología) sin tocar backend.
-    FHIR equivalente: HealthcareService / ServiceType CodeSystem.
+    Catálogo extensible de especialidades. No hardcodeado en queries.
+    Compartido: Cordis (derivación en guardia), Kairos (servicio quirúrgico),
+    Gia (obstetricia), Camas (asignación por especialidad).
+    FHIR: HealthcareService / ServiceType CodeSystem.
     """
     __tablename__ = "medical_service"
     __table_args__ = (
@@ -195,9 +201,8 @@ class MedicalService(Base):
 class LocationResource(Base):
     """
     FHIR Location — tabla unificada de infraestructura física del establecimiento.
-    Cubre boxes, camas, consultorios, quirófanos y salas de espera.
-    `estado_cache` es mutable y controla la visibilidad del llamador dinámico (Escenario 2).
-    `llamador_habilitado` se deshabilita en UI cuando el recurso entra en observación transitoria.
+    Compartido: Cordis (traslados, llamador), Kairos (quirófano, cama post-op),
+    Camas (disponibilidad), ICU (cama UTI).
     """
     __tablename__ = "location_resource"
 
@@ -217,8 +222,6 @@ class LocationResource(Base):
         nullable=False,
         index=True,
     )
-    # Habilitado = True por defecto; False bloquea el botón "Llamar" en la UI
-    llamador_habilitado: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     traslados_como_origen: Mapped[list[Traslado]] = relationship(
@@ -237,9 +240,12 @@ class LocationResource(Base):
 
 class Episodio(Base):
     """
-    FHIR Encounter — transacción de la visita actual.
-    Conecta al Paciente con el MedicalService de derivación.
-    `tags_clinicos` almacena antecedentes críticos de baja prioridad y metadatos de triage.
+    FHIR Encounter — transacción de la visita/encuentro clínico.
+    Compartido: todos los módulos registran encuentros (guardia, cirugía, obstetricia).
+
+    Estado: usa EstadoEncounter (genérico FHIR). Los estados específicos de cada
+    módulo (triage, llamado médico, etc.) se registran como HitoTiempo, no acá.
+    El enum Cordis-específico EstadoEpisodio vive en _candidatos_a_mover.py.
     """
     __tablename__ = "episodio"
 
@@ -250,24 +256,20 @@ class Episodio(Base):
     medical_service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("medical_service.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    # Ubicación física actual del paciente según la Location Matrix
+    # Ubicación física actual del paciente
     location_actual_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("location_resource.id", ondelete="SET NULL"), nullable=True
     )
 
-    estado: Mapped[EstadoEpisodio] = mapped_column(
-        Enum(EstadoEpisodio, name="estado_episodio"),
-        default=EstadoEpisodio.INGRESO_RECEPCION,
+    # Estado genérico FHIR — compartido por todos los módulos.
+    estado: Mapped[EstadoEncounter] = mapped_column(
+        Enum(EstadoEncounter, name="estado_encounter"),
+        default=EstadoEncounter.ACTIVO,
         nullable=False,
         index=True,
     )
-    nivel_triage: Mapped[Optional[NivelTriage]] = mapped_column(
-        Enum(NivelTriage, name="nivel_triage"), nullable=True
-    )
-    # JSONB: {antecedentes: [...], alergias: [...], tags_clinicos: [...]}
-    tags_clinicos: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
-    # Módulo emisor; habilita filtrado multi-producto en entornos compartidos
+    # Módulo emisor — permite filtrar episodios por producto en entornos multi-módulo.
     producto_origen: Mapped[ProductoOrigen] = mapped_column(
         Enum(ProductoOrigen, name="producto_origen"),
         default=ProductoOrigen.CORDIS,
@@ -300,15 +302,13 @@ class Episodio(Base):
     hitos: Mapped[list[HitoTiempo]] = relationship(
         back_populates="episodio", cascade="all, delete-orphan"
     )
-    episodio_obstetrico: Mapped[Optional[EpisodioObstetrico]] = relationship(
-        back_populates="episodio", uselist=False, cascade="all, delete-orphan"
-    )
 
 
 class Traslado(Base):
     """
-    Entidad de logística dinámica de camilleros.
-    origen_recurso_id → destino_recurso_id cubren los 5 escenarios de terreno.
+    Logística de movimiento físico entre LocationResources.
+    Compartido: Cordis (camilleros en guardia), Kairos (traslado a/desde quirófano),
+    Camas (traslado a cama asignada), ICU.
     Timestamps solicitado/asignado/inicio/completado permiten calcular RTT y SLA.
     """
     __tablename__ = "traslado"
@@ -339,10 +339,11 @@ class Traslado(Base):
         index=True,
     )
 
-    # FK a la tabla de usuarios/camilleros — se resolverá al integrar el módulo de RRHH
-    camillero_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    # Quién ejecuta el traslado (camillero, enfermero, técnico, etc.).
+    # Genérico: aplica a cualquier módulo que mueva pacientes.
+    responsable_traslado_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
 
-    # Timestamps de auditoría RTT/SLA
+    # Timestamps de auditoría RTT/SLA — compartidos por todos los módulos.
     solicitado_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -370,9 +371,11 @@ class Traslado(Base):
 class HitoTiempo(Base):
     """
     FHIR AuditEvent / Provenance — tabla Append-Only e inmutable.
-    Registra cada transición de estado del episodio con trazabilidad completa.
-    `metadata_evento` acepta payloads FHIR arbitrarios (signos vitales, laboratorio, etc.).
-    NUNCA se actualiza ni elimina; toda corrección se registra como hito compensatorio.
+    Compartido: todos los módulos registran transiciones de estado acá.
+    `producto_origen` identifica el módulo emisor.
+    `hito_codigo` es un string libre — cada módulo define sus propios códigos.
+    `metadata_evento` acepta cualquier payload FHIR (signos vitales, lab, etc.).
+    NUNCA se actualiza ni elimina; toda corrección es un hito compensatorio.
     """
     __tablename__ = "hito_tiempo"
 
@@ -385,15 +388,16 @@ class HitoTiempo(Base):
         Enum(ProductoOrigen, name="producto_origen"),
         nullable=False,
     )
-    # Código de hito: TRIAGE_COMPLETADO, MEDICO_LLAMADO, OBSERVACION_TRANSITORIA_INICIADA, etc.
+    # String libre — cada módulo define su vocabulario de hitos sin tocar el core.
+    # Cordis: TRIAGE_COMPLETADO, MEDICO_LLAMADO, etc.
+    # Kairos: PREINGRESO_CONFIRMADO, CIRUGIA_INICIADA, etc.
     hito_codigo: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
 
-    # Actor que generó el evento (puede ser un sistema automático o un usuario)
     actor_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     actor_rol: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     actor_nombre: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-    # Payload libre: signos vitales, recursos FHIR serializados, datos de contexto
+    # Payload libre: signos vitales, recursos FHIR, datos específicos del módulo.
     metadata_evento: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     registrado_at: Mapped[datetime] = mapped_column(
@@ -401,75 +405,3 @@ class HitoTiempo(Base):
     )
 
     episodio: Mapped[Episodio] = relationship(back_populates="hitos")
-
-
-# ---------------------------------------------------------------------------
-# Gia SaMD — Módulo Obstétrico / Protocolo FASGO 2025
-# ---------------------------------------------------------------------------
-
-class EpisodioObstetrico(Base):
-    """
-    Gia SaMD — extensión obstétrica del Episodio para trastornos hipertensivos.
-
-    Protocolo FASGO 2025:
-    - Elimina PE 'leve'/'severa'; clasifica por compromiso de órgano blanco.
-    - uRPC >= 30 mg/mmol es el estándar confirmatorio cuantitativo de proteinuria.
-    - Relación one-to-one con Episodio; solo existe para producto_origen='Gia'.
-    """
-    __tablename__ = "episodio_obstetrico"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    episodio_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("episodio.id", ondelete="CASCADE"),
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-
-    clasificacion_hta: Mapped[Optional[ClasificacionHTAFASGO2025]] = mapped_column(
-        Enum(ClasificacionHTAFASGO2025, name="clasificacion_hta_fasgo2025"),
-        nullable=True,
-        index=True,
-    )
-
-    edad_gestacional_semanas: Mapped[Optional[int]] = mapped_column(nullable=True)
-    presion_sistolica_mmhg: Mapped[Optional[int]] = mapped_column(nullable=True)
-    presion_diastolica_mmhg: Mapped[Optional[int]] = mapped_column(nullable=True)
-
-    # --- Signos de Severidad — Compromiso Neurológico ---
-    sev_eclampsia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sev_cefalea_persistente: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sev_escotomas: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    # --- Signos de Severidad — Compromiso Hepático ---
-    sev_epigastralgia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # GOT (AST) > 2× valor normal (> 70 U/L según FASGO 2025)
-    sev_got_elevada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sev_got_valor_ul: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
-    # GPT (ALT) > 2× valor normal (> 56 U/L según FASGO 2025)
-    sev_gpt_elevada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sev_gpt_valor_ul: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
-
-    # --- Signos de Severidad — Compromiso Hematológico ---
-    # Trombocitopenia: plaquetas < 100.000/mm³
-    sev_trombocitopenia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sev_plaquetas_valor_mm3: Mapped[Optional[int]] = mapped_column(nullable=True)
-
-    # --- Proteinuria — Razón Proteínas/Creatinina Urinaria (uRPC) ---
-    # Punto de corte FASGO 2025: >= 30 mg/mmol confirma proteinuria significativa.
-    # Reemplaza tiras reactivas cualitativas como estándar diagnóstico.
-    urpc_valor_mg_mmol: Mapped[Optional[Decimal]] = mapped_column(Numeric(7, 2), nullable=True)
-    # Calculado y persistido por la capa de servicio (urpc_valor_mg_mmol >= 30)
-    urpc_confirmatorio: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    urpc_fecha_muestra: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    registrado_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    episodio: Mapped[Episodio] = relationship(back_populates="episodio_obstetrico")
