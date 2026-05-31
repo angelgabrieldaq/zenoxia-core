@@ -22,9 +22,32 @@ independientes que suman cuando están juntas.
 
 # 2. Qué es zenoxia-core (y qué NO es)
 
-`zenoxia-core` es la **base de datos central e interoperable** por la que los
-módulos se comunican. Es el vocabulario común: las entidades que más de un módulo
-necesita, mapeadas a HL7 FHIR para que todos hablen el mismo idioma.
+`zenoxia-core` es el **vocabulario común e interoperable** del ecosistema: las
+entidades que más de un módulo necesita, mapeadas a HL7 FHIR para que todos hablen
+el mismo idioma de datos.
+
+## Modelo federado: el core sincroniza, no es una dependencia obligatoria
+> **Cada módulo funciona solo, con su propia base de datos y su propia
+> representación local de lo que necesita. El core es el PUNTO DE ENCUENTRO Y
+> SINCRONIZACIÓN entre módulos cuando coexisten — no una dependencia que cada
+> módulo necesite para arrancar.**
+
+Por qué: nadie compra el ecosistema completo de entrada. La primera venta es un
+módulo suelto a una institución que ya tiene su propio HIS y su mundo. Si un módulo
+no pudiera vivir sin el core pegado a su base, no sería vendible solo — y "cada
+módulo funciona solo" sería falso. Por eso el ecosistema es **federado**:
+
+- Cada módulo tiene base propia y representación local de las entidades que usa
+  (su propia noción de cama, de paciente/internación, etc.).
+- Cuando un módulo corre solo, funciona con su representación local. No necesita
+  el core.
+- Cuando varios módulos coexisten, el core es la capa que los mantiene en acuerdo:
+  cada módulo sincroniza su representación local con la entidad compartida del core.
+- El core sigue siendo la fuente de verdad *compartida* cuando hay varios módulos;
+  pero deja de ser un requisito de arranque de cada módulo por separado.
+
+Esto es la versión arquitectónica del mismo principio que ya rige a nivel dato (ej.
+Atlas funciona sin HIS): los módulos se paran solos y se enriquecen al conectarse.
 
 ## Principio de oro: compartido vs. específico de módulo
 > **El core contiene SOLO lo que es genuinamente compartido entre módulos.
@@ -38,8 +61,14 @@ FASGO y los umbrales hepáticos terminaron en el core central siendo lógica de 
 solo módulo — por eso hoy estorban.) El core debe envejecer bien; eso exige
 disciplina sobre qué entra.
 
-## Qué SÍ es del core (vocabulario común)
-- `Patient` — identidad del paciente (compartida por todos).
+El modelo federado NO contradice el principio de oro: el core sigue siendo el dueño
+del *vocabulario compartido* (qué es un Patient, qué es un LocationResource). Lo que
+cambia es que un módulo puede tener una *representación local* de esas entidades para
+funcionar solo, que sincroniza con el core cuando coexisten. La definición canónica
+es del core; la copia operativa local es del módulo.
+
+## Qué SÍ es del core (vocabulario común compartido)
+- `Patient` — identidad del paciente (definición canónica compartida).
 - `LocationResource` — infraestructura física unificada (camas, quirófanos, boxes,
   consultorios) bajo FHIR Location, con estado operativo.
 - `Episodio` — la visita/transacción que conecta paciente con servicio.
@@ -51,6 +80,8 @@ disciplina sobre qué entra.
 - Estados de máquina específicos de un flujo (triage de guardia, preingreso QX).
 - Lógica clínica de una especialidad (clasificaciones, umbrales, protocolos).
 - Reglas de negocio que solo un módulo aplica (ventana 48-72hs de Kairos, etc.).
+- La representación local que cada módulo mantiene para funcionar autónomo (se
+  sincroniza con el core, no la define el core).
 
 ---
 
@@ -139,8 +170,11 @@ arquitectura propio gobierna ese trabajo.
 
 # 5. Reglas que no se renegocian
 
-1. Cada módulo debe poder desplegarse y venderse solo.
+1. Cada módulo debe poder desplegarse y venderse solo — con su propia base y
+   representación local, sin depender del core para arrancar (modelo federado).
 2. El core solo contiene lo compartido. Lo específico, en su módulo.
-3. Interoperabilidad vía FHIR — los módulos hablan el mismo idioma de datos.
-4. HitoTiempo es append-only e inmutable — la auditoría no se reescribe.
-5. Las decisiones de diseño no le cierran la puerta a los módulos futuros del roadmap.
+3. El core es punto de sincronización entre módulos, no dependencia de arranque.
+   Cuando coexisten, cada módulo sincroniza su representación local con el core.
+4. Interoperabilidad vía FHIR — los módulos hablan el mismo idioma de datos.
+5. HitoTiempo es append-only e inmutable — la auditoría no se reescribe.
+6. Las decisiones de diseño no le cierran la puerta a los módulos futuros del roadmap.
