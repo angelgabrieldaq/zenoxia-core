@@ -46,18 +46,6 @@ class Base(AsyncAttrs, DeclarativeBase):
 # Enumeraciones de dominio
 # ---------------------------------------------------------------------------
 
-class TipoRecursoFHIR(str, enum.Enum):
-    """FHIR Location.physicalType — infraestructura física del establecimiento."""
-    CONSULTORIO = "CONSULTORIO"
-    BOX_OBSERVACION = "BOX_OBSERVACION"
-    CAMA_INTERNACION = "CAMA_INTERNACION"
-    QUIROFANO = "QUIROFANO"
-    SALA_ESPERA = "SALA_ESPERA"
-    AREA_IMAGEN = "AREA_IMAGEN"
-    UTI = "UTI"
-    UCO = "UCO"
-
-
 class EstadoCacheRecurso(str, enum.Enum):
     """Estado operativo del recurso físico; mutable para el llamador dinámico."""
     LIBRE = "LIBRE"
@@ -207,9 +195,11 @@ class LocationResource(Base):
         String(100), unique=True, nullable=True
     )
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
-    tipo: Mapped[TipoRecursoFHIR] = mapped_column(
-        Enum(TipoRecursoFHIR, name="tipo_recurso_fhir"), nullable=False
-    )
+    # String libre a propósito: cada módulo usa los códigos que necesita
+    # (CAMA_INTERNACION, UTI, UCO, QUIROFANO, CONSULTORIO, BOX_OBSERVACION,
+    # SALA_ESPERA, AREA_IMAGEN, y los que traigan módulos futuros) sin que el core
+    # deba conocerlos de antemano. Convención documentada en docs/.
+    tipo: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     sector: Mapped[str] = mapped_column(String(50), nullable=False)
     estado_cache: Mapped[EstadoCacheRecurso] = mapped_column(
         Enum(EstadoCacheRecurso, name="estado_cache_recurso"),
